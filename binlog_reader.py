@@ -1,7 +1,10 @@
+import csv
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication import row_event
 import configparser
+import boto3
 import pymysqlreplication
+import time
 
 #create parser object
 parser = configparser.ConfigParser()
@@ -24,20 +27,82 @@ mysql_settings = {
 
 #create bin log stream reader object
 #first connects to mysql 
-b_stream = BinLogStreamReader(
-  connection_settings=mysql_settings,
-  server_id=100,
-  resume_stream= True,
-  log_pos=1400,
-  only_events=[row_event.DeleteRowsEvent,
-               row_event.WriteRowsEvent,
-               row_event.UpdateRowsEvent]
+try:
+  b_stream = BinLogStreamReader(
+    connection_settings=mysql_settings,
+    server_id=1000,
+    #blocking=True,
+    #resume_stream= True,
+    #log_pos=1400,
+    only_events=[row_event.DeleteRowsEvent,
+                 row_event.WriteRowsEvent,
+                 row_event.UpdateRowsEvent]
 
-)
+  )
+except Exception as e:
+  print(f"Error connecting to MySQL: {e}")
 
-print(b_stream.mysql_version)
-for event in b_stream:
-  event.dump()
+#createa list of order events to be placed in csv
+order_events = []
+print(order_events)
+#for each event of our bin log
+for binlogevent in b_stream:
 
+  #parse through each row
+  for row in binlogevent.rows:
+
+    #we will parse through each table of the DB
+    #if the table is orders
+    if binlogevent.table == 'orders':
+      
+      #create a dictionary to store the type of action from the bin log
+      event = {}
+      
+      #parse through each instance : delete , update, and insert
+      if isinstance(binlogevent,row_event.DeleteRowsEvent):
+        event["action"] = "delete"
+        event.update(row["values"].items())
+      elif isinstance(binlogevent,row_event.UpdateRowsEvent):
+        event["action"] = "update"
+        event.update(row["after_values"].items())
+      elif isinstance(binlogevent,row_event.WriteRowsEvent):
+        event["action"] = "insert"
+        event.update(row["values"].items())
+
+      #append to our dictionary
+      order_events.append(event)
+
+#close our stream
 b_stream.close()
 
+
+keys = order_events[0].keys()
+
+#we will save bin log dictionary into an orders_extract file
+local_filename = 'orders_extract.csv'
+
+#open our filename and write and write the keys
+with open(local_filename,'w', newline='') as output_file:
+    dict_writer = csv.DictWriter(
+                output_file, keys,delimiter='|')
+    
+    #write the events to each row
+    dict_writer.writerows(order_events)
+
+# load the aws_boto_credentials values
+parser = configparser.ConfigParser()
+parser.read("pipeline.conf")
+access_key = parser.get("aws_boto_credentials","access_key")
+secret_key = parser.get("aws_boto_credentials","secret_key")
+bucket_name = parser.get("aws_boto_credentials","bucket_name")
+
+#create s3 bucket object with credenitals
+s3 = boto3.client('s3',
+                  aws_access_key_id = access_key,
+                  aws_secret_access_key = secret_key)
+
+#copy local filename 
+s3_file = local_filename
+
+#upload our file to s3 bucket
+s3.upload_file(local_filename,bucket_name, s3_file)
