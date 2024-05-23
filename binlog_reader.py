@@ -5,6 +5,12 @@ import configparser
 import boto3
 import pymysqlreplication
 import time
+"""
+MySQL binlog is a log that keeps a record of every operation (INSERT, DELETE, UPDATE)
+performed in the database. The Purpose is to replicate the data and ingest it into a data warehouse.
+binlog_reader connects to MySQl database, reads the binlog and writes to a local file
+called orders_extract.csv and then sends it S3 in AWS. 
+"""
 
 #create parser object
 parser = configparser.ConfigParser()
@@ -22,7 +28,7 @@ mysql_settings = {
   "host": hostname,
   "port": int(port),
   "user": username,
-  "passwd": password
+  "password": password
 }
 
 #create bin log stream reader object
@@ -33,7 +39,7 @@ try:
     server_id=1000,
     #blocking=True,
     #resume_stream= True,
-    #log_pos=1400,
+    log_pos=1,
     only_events=[row_event.DeleteRowsEvent,
                  row_event.WriteRowsEvent,
                  row_event.UpdateRowsEvent]
@@ -42,12 +48,13 @@ try:
 except Exception as e:
   print(f"Error connecting to MySQL: {e}")
 
+
 #createa list of order events to be placed in csv
 order_events = []
 print(order_events)
 #for each event of our bin log
 for binlogevent in b_stream:
-
+  print(binlogevent)
   #parse through each row
   for row in binlogevent.rows:
 
@@ -75,7 +82,7 @@ for binlogevent in b_stream:
 #close our stream
 b_stream.close()
 
-
+print(order_events)
 keys = order_events[0].keys()
 
 #we will save bin log dictionary into an orders_extract file
